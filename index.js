@@ -1,11 +1,35 @@
 require('dotenv').config();
 const readline = require('readline');
-const { exec } = require('child_process');
+const { spawn } = require('child_process');
 const OpenAIApi = require('openai');
 
 // Set up your OpenAI API key
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const ORGANIZATION = process.env.OPENAI_API_ORGANIZATION;
+
+
+const DEFAULT = '\x1b[0m';
+const BLACK = '\x1b[30m';
+const RED = '\x1b[31m';
+const GREEN = '\x1b[32m';
+const BRIGHT_GREEN = '\x1b[38;5;10m';
+const ROSE = '\x1b[38;5;9m';
+const YELLOW = '\x1b[33m';
+const BLUE = '\x1b[34m';
+const MAGENTA = '\x1b[35m';
+const CYAN = '\x1b[36m';
+const WHITE = '\x1b[37m';
+
+const BLACK_BG = '\x1b[40m';
+const RED_BG = '\x1b[41m';
+const GREEN_BG = '\x1b[42m';
+const YELLOW_BG = '\x1b[43m';
+const BLUE_BG = '\x1b[44m';
+const MAGENTA_BG = '\x1b[45m';
+const CYAN_BG = '\x1b[46m';
+const WHITE_BG = '\x1b[47m';
+
+const SPLITTER = MAGENTA+'================================================================================'+DEFAULT;
 
 const openai = new OpenAIApi({
     key: OPENAI_API_KEY
@@ -14,7 +38,7 @@ const openai = new OpenAIApi({
 const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
-    prompt: 'nl-cli> '
+    prompt: CYAN+process.cwd()+BLUE+' nl-cli> '+BRIGHT_GREEN
 });
 
 let messages = [
@@ -49,12 +73,12 @@ rl.on('line', async (line) => {
 	messages.push({role: 'assistant', content: reply});
 	interpretResponse(reply);
     } catch (error) {
-        console.error('Error interacting with OpenAI API:', error.message);
+        console.error(RED,'Error interacting with OpenAI API:', error.message,DEFAULT);
 	process.exit(0);
     }
 //    rl.prompt();
 }).on('close', () => {
-    console.log('Have a great day!');
+    console.log(YELLOW,'Have a great day!',DEFAULT);
     process.exit(0);
 });
 
@@ -70,7 +94,7 @@ async function analyzeOutputWithOpenAI(output) {
         });
 
         const reply = response.choices[0].message.content.trim();
-        console.log(`Reply: ${reply}`);
+        console.log(YELLOW,`Reply:`,GREEN,` ${reply}`,DEFAULT);
 
         // Append the assistant's reply to the messages array for context
         messages.push({ role: 'assistant', content: reply });
@@ -80,7 +104,7 @@ async function analyzeOutputWithOpenAI(output) {
         rl.prompt();
 
     } catch (error) {
-        console.error('Error interacting with OpenAI API:', error.message);
+        console.error(RED,'Error interacting with OpenAI API:', error.message, DEFAULT);
 	process.exit(0);
     }
 }
@@ -97,7 +121,7 @@ async function executionError(err) {
         });
 
         const reply = response.choices[0].message.content.trim();
-        console.log(`Reply: ${reply}`);
+        console.log(YELLOW,`Reply:`,GREEN,` ${reply}`,DEFAULT);
 
         // Append the assistant's reply to the messages array for context
         messages.push({ role: 'assistant', content: reply });
@@ -106,7 +130,7 @@ async function executionError(err) {
         rl.prompt();
 
     } catch (error) {
-        console.error('Error interacting with OpenAI API:', error.message);
+        console.error(RED,'Error interacting with OpenAI API:', error.message,DEFAULT);
 	process.exit(0);
     }
 }
@@ -121,7 +145,7 @@ async function rejectedByUser(){
 	        });
 
 	        const reply = response.choices[0].message.content.trim();
-    		console.log(`Reply: ${reply}`);
+    		console.log(YELLOW,`Reply:`,GREEN,` ${reply}`,DEFAULT);
 
 	        // Append the assistant's reply to the messages array for context
 	        messages.push({ role: 'assistant', content: reply });
@@ -134,15 +158,48 @@ async function rejectedByUser(){
 }
 
 async function interpretResponse(reply){
-	const [description, command] = reply.split('|CMD|');
-	const cmd = (typeof command !== 'undefined')?command.trim():null;
-	console.log(`Description: ${description.trim()}`);
-	console.log(`Suggested Command(s): ${cmd}`);
+	let accumulatedOutput = "";
+	let stdErr = "";
+	const [description, instruction] = reply.split('|CMD|');
+	const command = (typeof instruction !== 'undefined')?instruction.trim():null;
+	console.log(YELLOW,`Description:`,GREEN,` ${description.trim()}`,DEFAULT);
+	console.log(YELLOW,`Suggested Command(s):`,ROSE,` ${command}`,DEFAULT);
 	
-	if((typeof command !== 'undefined')&&(cmd.length>0))rl.question('Do you approve the execution of this command? (yes/no) ', (answer) => {
+	if((typeof instruction !== 'undefined')&&(command.length>0))rl.question(YELLOW+'Do you approve the execution of this command? (yes/no) '+BRIGHT_GREEN, (answer) => {
 	    if (answer.toLowerCase() === 'yes') {
-    		console.log('Executing command...');
-		exec(cmd, (error, stdout, stderr) => {
+    		console.log(YELLOW, 'Executing command: ',ROSE,command,YELLOW,'...',DEFAULT);
+		console.log(SPLITTER);
+
+//		const fullCommand = `bash -c "${command}"`;
+//		const commandParts = fullCommand.split(' ');
+		const cmd = `/bin/sh`;
+		const args = ['-c', `"${command}"`];
+		const child = spawn(command, { shell: true });
+
+		child.stdout.on('data', (data) => {
+		    const str = data.toString();
+	    	    console.log(str);
+		    accumulatedOutput += 'STDOUT: '+str;
+	        });
+
+		child.stderr.on('data', (data) => {
+		    const str = data.toString();
+	    	    console.error(RED,str,DEFAULT);
+		    accumulatedOutput += 'STDERR: '+str;
+		    stdErr+=str;
+	        });
+
+		child.on('close', (code) => {
+		    accumulatedOutput += '\n\nPROGRAM TERMINATED. EXIT_CODE: '+code;
+		    if(stdErr.length > 0)
+			accumulatedOutput += 'STDERR NON-EMPTY. PLEASE CONSIDER THE WHOLE STDERR: '+stdErr;
+		    console.log(SPLITTER);
+		    console.log(YELLOW,`Child process exited with code ${code}`,DEFAULT);
+		    console.log();
+		    analyzeOutputWithOpenAI(accumulatedOutput);
+		});
+
+/*		exec(cmd, (error, stdout, stderr) => {
     		    if (error) {
         		console.error(`Execution Error: ${error}`);
 			executionError(error);
@@ -156,9 +213,9 @@ async function interpretResponse(reply){
     		    console.log(`STDOUT: ${stdout}`);
     		    // Now, send `stdout` or any other relevant info back to OpenAI for further analysis
     		    analyzeOutputWithOpenAI(stdout);
-		});
+		});*/
 	    } else {
-    		console.log('Command not executed.');
+    		console.log(YELLOW,'Command not executed.',DEFAULT);
 		rejectedByUser();
 	    }
 //	    rl.prompt();
