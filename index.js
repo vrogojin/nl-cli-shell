@@ -35,11 +35,10 @@ const openai = new OpenAIApi({
     key: OPENAI_API_KEY
 });
 
-const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-    prompt: CYAN+process.cwd()+BLUE+' nl-cli> '+BRIGHT_GREEN
-});
+
+let rl;
+
+let isReadlineOpen = false;
 
 let messages = [
     {role: 'system', content: `You are an AI agent for CLI shell.
@@ -60,26 +59,44 @@ let messages = [
     {role: 'assistant', content: 'you can list a directory with "ls", read a file with "cat", write a new file with "echo >", etc.'}
 ];
 
-rl.prompt();
 
-rl.on('line', async (line) => {
-    messages.push({role: 'user', content: line.trim()});
-    try {
-        const response = await openai.chat.completions.create({
-            model: 'gpt-4',  // Adjust the model if needed
-	    messages: messages
-        });
-	const reply = response.choices[0].message.content.trim();
-	messages.push({role: 'assistant', content: reply});
-	interpretResponse(reply);
-    } catch (error) {
-        console.error(RED,'Error interacting with OpenAI API:', error.message,DEFAULT);
+function initializeReadline() {
+
+    rl = readline.createInterface({
+	input: process.stdin,
+	output: process.stdout,
+	prompt: CYAN+process.cwd()+BLUE+' nl-cli> '+BRIGHT_GREEN
+    });
+
+    rl.on('line', async (line) => {
+	messages.push({role: 'user', content: line.trim()});
+	try {
+    	    const response = await openai.chat.completions.create({
+        	model: 'gpt-4',  // Adjust the model if needed
+		messages: messages
+    	    });
+	    const reply = response.choices[0].message.content.trim();
+	    messages.push({role: 'assistant', content: reply});
+	    interpretResponse(reply);
+	} catch (error) {
+    	    console.error(RED,'Error interacting with OpenAI API:', error.message,DEFAULT);
+	    process.exit(0);
+	}
+    }).on('close', () => {
+	isReadlineOpen = false;
+    });
+    isReadlineOpen = true;
+}
+
+function promptUser(){
+    if(!isReadlineOpen)
+	initializeReadline();
+    rl.prompt();
+}
+
+process.on('exit', () => {
+	console.log(YELLOW,'Have a great day!',DEFAULT);
 	process.exit(0);
-    }
-//    rl.prompt();
-}).on('close', () => {
-    console.log(YELLOW,'Have a great day!',DEFAULT);
-    process.exit(0);
 });
 
 async function analyzeOutputWithOpenAI(output) {
@@ -101,7 +118,7 @@ async function analyzeOutputWithOpenAI(output) {
 	interpretResponse(reply);
 
         // Prompt the user for the next action or continue processing based on the reply
-        rl.prompt();
+//	promptUser();
 
     } catch (error) {
         console.error(RED,'Error interacting with OpenAI API:', error.message, DEFAULT);
@@ -127,7 +144,7 @@ async function executionError(err) {
         messages.push({ role: 'assistant', content: reply });
 
         // Prompt the user for the next action or continue processing based on the reply
-        rl.prompt();
+	promptUser();
 
     } catch (error) {
         console.error(RED,'Error interacting with OpenAI API:', error.message,DEFAULT);
@@ -153,8 +170,7 @@ async function rejectedByUser(){
 		interpretResponse(reply);
 
     		// Prompt the user for the next action or continue processing based on the reply
-	        rl.prompt();
-
+		promptUser();
 }
 
 async function interpretResponse(reply){
@@ -165,6 +181,7 @@ async function interpretResponse(reply){
 	console.log(YELLOW,`Description:`,GREEN,` ${description.trim()}`,DEFAULT);
 	console.log(YELLOW,`Suggested Command(s):`,ROSE,` ${command}`,DEFAULT);
 	
+	if(!isReadlineOpen)initializeReadline();
 	if((typeof instruction !== 'undefined')&&(command.length>0))rl.question(YELLOW+'Do you approve the execution of this command? (yes/no) '+BRIGHT_GREEN, (answer) => {
 	    if (answer.toLowerCase() === 'yes') {
     		console.log(YELLOW, 'Executing command: ',ROSE,command,YELLOW,'...',DEFAULT);
@@ -174,7 +191,9 @@ async function interpretResponse(reply){
 //		const commandParts = fullCommand.split(' ');
 		const cmd = `/bin/sh`;
 		const args = ['-c', `"${command}"`];
-		const child = spawn(command, { shell: true });
+
+		if(isReadlineOpen)rl.close();
+		const child = spawn(command, { shell: true, stdio: ['inherit']});
 
 		child.stdout.on('data', (data) => {
 		    const str = data.toString();
@@ -189,7 +208,7 @@ async function interpretResponse(reply){
 		    stdErr+=str;
 	        });
 
-		child.on('close', (code) => {
+		child.on('exit', (code) => {
 		    accumulatedOutput += '\n\nPROGRAM TERMINATED. EXIT_CODE: '+code;
 		    if(stdErr.length > 0)
 			accumulatedOutput += 'STDERR NON-EMPTY. PLEASE CONSIDER THE WHOLE STDERR: '+stdErr;
@@ -219,5 +238,10 @@ async function interpretResponse(reply){
 		rejectedByUser();
 	    }
 //	    rl.prompt();
-	});else rl.prompt();
+	});else promptUser();
+//	initializeReadline();
+//	rl.prompt();
 }
+
+initializeReadline();
+rl.prompt();
