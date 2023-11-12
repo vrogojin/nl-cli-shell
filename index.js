@@ -65,6 +65,10 @@ let global_messages = [
     {role: 'assistant', content: 'you can list a directory with "ls", read a file with "cat", write a new file with "echo >", etc.'}
 ];
 
+// Enable unhandled promise rejection warnings
+/*process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});*/
 
 function initializeReadline() {
 
@@ -193,14 +197,13 @@ async function compactMessages(messages){
     console.log(YELLOW,`Compacting messages of total size ${size}...`,DEFAULT);
 
     const compacting_instruction = {role: 'user', content: `
-	Summarize all the conversation except of the first two messages into a single summary of size not exceeding 4096 symbols. Thanks!
-	Also, please make sure to deliver the idea of the last message in your summary.
+	Summarize all the conversation except of the first two and the last message into a single summary of size not exceeding 4096 symbols. Thanks!
     `}
 
 //    console.log("LAST: "+messages[messages.length-1]);
-    if(messages[messages.length-1].content.length > 2048*4)messages=await compactLastMessage(messages);
+    if(messages[messages.length-1].content.length > 2048*8)messages=await compactLastMessage(messages);
 
-    if(calculateSize(messages)<=2048*8)
+    if(calculateSize(messages)<=2048*10)
 	return messages;
 
     messages.push(compacting_instruction);
@@ -213,7 +216,7 @@ async function compactMessages(messages){
     console.log(SPLITTER);
     console.log(GREEN,summary_message.content,DEFAULT);
 
-    let compacted_messages = [messages[0],messages[1],summary_message];
+    let compacted_messages = [messages[0],messages[1],summary_message,messages[messages.length-1]];
 
     console.log(YELLOW,'Compacting messages completed',DEFAULT);
     console.log(SPLITTER);
@@ -222,7 +225,7 @@ async function compactMessages(messages){
 
 async function talkToAI(messages){
 //	console.log(messages);
-	if(calculateSize(messages)>2048*8)
+	if(calculateSize(messages)>2048*10)
 	    global_messages = await compactMessages(messages);
 //	console.log(global_messages);
         return await openai.chat.completions.create({
@@ -297,16 +300,30 @@ async function rejectedByUser(){
 }
 
 async function interpretResponse(reply){
-	let accumulatedOutput = "";
-	let stdErr = "";
+	
 	const [description, instruction] = reply.split('|CMD|');
-	const command = (typeof instruction !== 'undefined')?instruction.split('\n')[0].trim():null;
+	let command = (typeof instruction !== 'undefined')?instruction.split('\n')[0].trim():null;
 	console.log(YELLOW,`Description:`,GREEN,` ${description.trim()}`,DEFAULT);
 	console.log(YELLOW,`Suggested Command(s):`,ROSE,` ${command}`,DEFAULT);
 	
 	if(!isReadlineOpen)initializeReadline();
-	if((typeof instruction !== 'undefined')&&(command.length>0))rl.question(YELLOW+'Do you approve the execution of this command? (yes/no) '+BRIGHT_GREEN, (answer) => {
-	    if (answer.toLowerCase() === 'yes') {
+	if((typeof instruction !== 'undefined')&&(command.length>0))rl.question(YELLOW+'Do you approve/modify the execution of this command? (default yes, modified command/no) '+BRIGHT_GREEN, (answer) => {
+	    try{
+	    console.log("ANSWER: "+answer);
+	    if(answer.trim() === '')answer = 'yes';
+	    if(answer.trim().toLowerCase() === 'no'){
+    		console.log(YELLOW,'Command not executed.',DEFAULT);
+		rejectedByUser();
+		return;
+	    }
+	    let accumulatedOutput;
+	    if(answer.trim().toLowerCase() != 'yes'){
+		command = answer;
+		accumulatedOutput = "I have modified your command and will execute: "+command+"\n";
+	    }
+	    else
+		accumulatedOutput = "Executing BASH command: "+command+"\n";
+	    let stdErr = "";
     		console.log(YELLOW, 'Executing command: ',ROSE,command,YELLOW,'...',DEFAULT);
 		console.log(SPLITTER);
 
@@ -314,6 +331,7 @@ async function interpretResponse(reply){
 		const args = ['-c', `"${command}"`];
 
 		if(isReadlineOpen)rl.close();
+
 		const child = spawn(command, { shell: true, stdio: ['inherit']});
 
 		child.stdout.on('data', (data) => {
@@ -354,11 +372,8 @@ async function interpretResponse(reply){
     		    // Now, send `stdout` or any other relevant info back to OpenAI for further analysis
     		    analyzeOutputWithOpenAI(stdout);
 		});*/
-	    } else {
-    		console.log(YELLOW,'Command not executed.',DEFAULT);
-		rejectedByUser();
-	    }
 //	    rl.prompt();
+	    }catch(err){console.error(err);}
 	});else promptUser();
 //	initializeReadline();
 //	rl.prompt();
